@@ -40,11 +40,12 @@ The heuristic secret scanner checked 227 reachable historical text blobs plus cu
 | Python runtime dependency audit | No known vulnerabilities |
 | Reachable-history/current-tree heuristic secret scan | No non-placeholder candidates |
 | Docker Compose configuration | Pass using standalone Compose CLI |
-| Docker images / container networking | Blocked locally: Docker daemon unavailable |
-| Live marketplace / real Discord | Not exercised |
+| Docker images / container networking | Pass in GitHub Actions: both images build, validator becomes healthy, worker receives A/B/C decisions |
+| Chromium in worker container | Pass in GitHub Actions |
+| Live marketplace / real Discord / Hetzner | Optional; not exercised |
 
 Windows sandbox restrictions initially stalled the FastAPI test client's loopback socket setup. The suite passed with local loopback access; no production workaround was introduced.
 
-## Required release follow-up
+## Hosted Docker validation
 
-Run the committed GitHub Actions workflow on a Docker-enabled runner and confirm both images, Compose service communication, and Chromium launch pass. This is the outstanding validation gate before claiming a verified container deployment. Real credentials are not needed for that gate.
+The [GitHub Actions run for hardening commit fca00a7](https://github.com/JoshkieChan/Opportunity-Scout/actions/runs/37631912367) passed both the tests and Docker jobs. This closes the container validation gate despite the local machine lacking a Docker daemon. Live scraping, Discord delivery, and Hetzner deployment are optional and are not portfolio release blockers.

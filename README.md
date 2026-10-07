@@ -149,7 +149,7 @@ python scripts/scan_secrets.py
 
 Tests cover financial parsing, approval gates, score/tier boundaries, source spoofing, invalid API inputs, ranking, bounded retries, tier routing, and browser cleanup. A real Chromium test intercepts requests with fixture HTML; it does not contact third-party sites. `scripts/smoke.js` verifies Node-to-FastAPI communication over actual HTTP.
 
-GitHub Actions runs Python and Node tests, static checks, dependency audits, the HTTP integration test, Docker builds, Compose networking, and a container Chromium smoke test. CI requires no Discord credentials. The workflow is added locally; its first hosted result is pending.
+GitHub Actions runs Python and Node tests, static checks, dependency audits, the HTTP integration test, Docker builds, Compose networking, and a container Chromium smoke test. CI requires no Discord credentials. Both jobs passed in the [hardening validation run](https://github.com/JoshkieChan/Opportunity-Scout/actions/runs/37631912367).
 
 ## Limitations and project status
 
@@ -159,7 +159,7 @@ GitHub Actions runs Python and Node tests, static checks, dependency audits, the
 - Gumroad products are often licenses rather than transferable businesses; approval does not establish resale or ownership rights.
 - Deduplication is per cycle only. There is no persistent alert history or guaranteed delivery; repeat alerts across cycles are possible.
 - Python direct dependencies and Node's dependency graph are pinned; Python transitive dependencies are resolved at installation and audited in CI.
-- Live Discord delivery and current marketplace discovery were not exercised during the offline hardening pass.
-- Local tests, API HTTP integration, Chromium fixture extraction, and Compose configuration validation pass. **Docker image builds and container networking still need a successful Docker-enabled CI run** because the development environment had no Docker daemon.
+- Live Discord delivery, current marketplace discovery, and Hetzner hosting are optional integrations, outside the required portfolio validation scope. They were not exercised during the hardening pass.
+- Local tests, API HTTP integration, Chromium fixture extraction, and Compose configuration validation pass. Both Docker images, validator health, worker-to-validator communication over the Compose network, and Chromium inside the worker container also passed in GitHub Actions.
 
 This is a portfolio prototype demonstrating backend and automation engineering, not a production investment screening service. See [the audit record](docs/AUDIT.md) for the changes and validation evidence.
