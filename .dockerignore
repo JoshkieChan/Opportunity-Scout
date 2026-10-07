@@ -1,6 +1,12 @@
-node_modules
-npm-debug.log
-monitor.log
-.env
 .git
-.DS_Store
+.env
+.env.*
+!.env.example
+**/node_modules
+.venv
+.tools
+**/__pycache__
+**/.pytest_cache
+**/*.log
+data
+logs

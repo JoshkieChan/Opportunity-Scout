@@ -1,21 +1,33 @@
+name: opportunity-scout
 services:
   validator:
-    container_name: sneakerbot-validator
     build: ./validator
-    env_file: 
-    - .env
-    restart: always
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   bot:
-    container_name: sneakerbot-bot
     build: ./bot
+    init: true
+    shm_size: 1gb
     depends_on:
-      - validator
-    volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-    env_file: 
-    - .env
+      validator:
+        condition: service_healthy
     environment:
-      - NODE_ENV=production
-    restart: always
+      NODE_ENV: production
+      VALIDATOR_URL: http://validator:8000/validate
+      DISCORD_TOKEN: ${DISCORD_TOKEN:-}
+      CHANNEL_ID_PRIORITY: ${CHANNEL_ID_PRIORITY:-}
+      CHANNEL_ID_REVIEW: ${CHANNEL_ID_REVIEW:-}
+      DRY_RUN: ${DRY_RUN:-true}
+      RUN_ONCE: ${RUN_ONCE:-false}
+      HTTP_TIMEOUT_MS: ${HTTP_TIMEOUT_MS:-10000}
+      CYCLE_INTERVAL_MS: ${CYCLE_INTERVAL_MS:-600000}
+      REQUEST_DELAY_MS: ${REQUEST_DELAY_MS:-2000}
+      MAX_TARGETS_PER_CYCLE: ${MAX_TARGETS_PER_CYCLE:-30}
+    restart: unless-stopped
+    stop_grace_period: 45s

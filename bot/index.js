@@ -1,226 +1,113 @@
-const axios = require('axios');
+const { setTimeout: sleep } = require('node:timers/promises');
+const { readFile } = require('node:fs/promises');
+const { loadConfig } = require('./config');
+const { rankDeals, validateProduct } = require('./logic');
 const ScoutAgent = require('./scout');
-require('dotenv').config();
-const { Client, GatewayIntentBits } = require('discord.js');
 
-// 1. CONFIG
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-const VALIDATOR_URL = 'http://validator:8000/validate';
-const scout = new ScoutAgent();
-
-// 2. ERROR HANDLING
-process.on("unhandledRejection", err => console.error("🚨 UNHANDLED REJECTION:", err));
-process.on("uncaughtException", err => console.error("🚨 UNCAUGHT EXCEPTION:", err));
-
-// 3. CORE LOGIC
-// 3. TIERING & ROUTING
-function classifyTier(confidence) {
-    if (confidence >= 90) return "A";
-    if (confidence >= 80) return "B";
-    return "C";
+function plain(value) {
+  return String(value).replace(/[*_`~|<>@]/g, '').slice(0, 200);
 }
 
-function getChannelIdForTier(tier) {
-    if (tier === "A") return process.env.CHANNEL_ID_PRIORITY;
-    if (tier === "B") return process.env.CHANNEL_ID_REVIEW;
-    return null; // Tier C filtered
+async function sendAlert(client, product, result, config) {
+  if (!result.approved) return;
+  if (config.dryRun) {
+    console.log('[DRY RUN] Tier ' + result.tier + ', score ' + result.confidence);
+    return;
+  }
+  const channel = await client.channels.fetch(config.channels[result.tier]);
+  if (!channel?.isSendable()) throw new Error('Channel is not sendable');
+  await channel.send({
+    content: '**TIER ' + result.tier + ' OPPORTUNITY**\n' + plain(product.title) +
+      '\nPrice: $' + product.price + ' | Heuristic score: ' + result.confidence +
+      '\nClaimed monthly revenue: $' + result.monthly_revenue +
+      '\nClaimed monthly profit: $' + result.monthly_profit + '\n' + product.url.slice(0, 1000),
+    allowedMentions: { parse: [] },
+  });
 }
 
-async function sendAlert(client, product, confidence) {
-    const tier = classifyTier(confidence);
-    
-    if (tier === "C") {
-        console.log(`[FILTERED] Skipped: ${product.title} (${confidence}%)`);
-        return;
-    }
-
-    const channelId = getChannelIdForTier(tier);
-    if (!channelId || !client.isReady()) {
-        console.error(`❌ [ERROR] Missing Channel ID for Tier ${tier} or Client not ready.`);
-        return;
-    }
-
+async function runCycle({ scout, client, config, signal, products, validate = validateProduct }) {
+  const results = [];
+  const targets = products || [...new Set([
+    ...await scout.discoverFlippa(), ...await scout.discoverGumroad(),
+  ])];
+  for (const target of targets.slice(0, config.maxTargets)) {
+    if (signal?.aborted) break;
     try {
-        const channel = await client.channels.fetch(channelId);
-        let alertMsg = `
-🚨 **TIER ${tier} DEAL**
-
-📦 **Product:** ${product.title}
-💰 **Price:** $${product.price}
-📊 **Confidence:** ${confidence}%
-`;
-
-        if (product.revenue > 0) alertMsg += `💵 **Monthly Revenue:** $${product.revenue}\n`;
-        if (product.profit > 0) alertMsg += `📈 **Monthly Profit:** $${product.profit}\n`;
-
-        alertMsg += `\n🔗 **Link:** ${product.url}`;
-        
-        await channel.send(alertMsg);
-        
-        const loc = (tier === "A") ? "priority channel" : "review channel";
-        console.log(`[TIER ${tier}] Sent to ${loc}: ${product.title}`);
-    } catch (err) {
-        console.error(`❌ [TIER ${tier}] SEND ERROR:`, err.message);
+      const product = products ? target : await scout.scrapeUrl(target);
+      if (!product) continue;
+      const result = await validate(product, config, { signal });
+      if (result?.approved) {
+        results.push({ ...product, ...result });
+        await sendAlert(client, product, result, config);
+      }
+    } catch {
+      console.warn('[WORKER] Listing or alert failed');
     }
-}
-
-function rankDeals(results) {
-    return results
-        .sort((a, b) => {
-            if (b.confidence !== a.confidence) return b.confidence - a.confidence;
-            return b.price - a.price;
-        })
-        .slice(0, 3);
-}
-
-async function sendSummary(client, results) {
-    if (!results.length) return;
-
-    const topDeals = rankDeals(results);
-    const channelId = process.env.CHANNEL_ID_PRIORITY;
-    
-    if (!channelId || !client.isReady()) return;
-
+    if (config.delayMs) await sleep(config.delayMs, undefined, { signal }).catch(() => {});
+  }
+  if (results.length && !config.dryRun && !signal?.aborted) {
     try {
-        const channel = await client.channels.fetch(channelId);
-        let summary = `🏆 **TOP DEALS THIS CYCLE**\n\n`;
-
-        topDeals.forEach((deal, index) => {
-            summary += `${index + 1}. **${deal.title}**\n`;
-            summary += `💰 $${deal.price} | 📊 ${deal.confidence}%\n`;
-            if (deal.revenue > 0) summary += `💵 Rev: $${deal.revenue} | `;
-            if (deal.profit > 0) summary += `📈 Prof: $${deal.profit}`;
-            summary += `\n🔗 ${deal.url}\n\n`;
-        });
-
-        await channel.send(summary);
-        console.log("[SUMMARY] Top deals sent to Priority channel");
-    } catch (err) {
-        console.error("❌ [SUMMARY] SEND ERROR:", err.message);
+      const channel = await client.channels.fetch(config.channels.A);
+      await channel.send({
+        content: '**TOP OPPORTUNITIES THIS CYCLE**\n' + rankDeals(results)
+          .map((deal, i) => (i + 1) + '. ' + plain(deal.title) + ' | $' + deal.price +
+            ' | Score ' + deal.confidence + '\n' + deal.url.slice(0, 300)).join('\n'),
+        allowedMentions: { parse: [] },
+      });
+    } catch {
+      console.warn('[WORKER] Summary delivery failed');
     }
+  }
+  console.log('[WORKER] Cycle complete; approved=' + results.length);
+  return results;
 }
 
-// 4. CORE LOOP
-async function processSignal(url) {
-    console.log(`[PROCESS] Validating: ${url}`);
-    try {
-        const product = await scout.scrapeUrl(url);
-        if (!product || !product.price) {
-            console.log(`❌ [REJECTED] ${url}: Failed to extract valid price`);
-            return null;
-        }
-
-        const validation = await axios.post(VALIDATOR_URL, {
-            title: product.title,
-            price: product.price,
-            reviews: parseInt(product.ratingCount) || 0,
-            description: product.description || "N/A",
-            url: product.url
-        });
-
-        const result = validation.data;
-
-        if (result.approved) {
-            console.log(`✅ [APPROVED] ${product.title} (${result.confidence}%) [Tier ${result.tier}]`);
-            
-            const enrichedProduct = {
-                ...product,
-                revenue: result.monthly_revenue,
-                profit: result.monthly_profit
-            };
-            
-            await sendAlert(client, enrichedProduct, result.confidence);
-            
-            return {
-                title: product.title,
-                price: product.price,
-                confidence: result.confidence,
-                revenue: result.monthly_revenue,
-                profit: result.monthly_profit,
-                url: product.url
-            };
-        } else {
-            console.log(`❌ [REJECTED] ${product.title}: ${result.reason}`);
-            return null;
-        }
-    } catch (err) {
-        console.error(`[PROCESS ERROR] ${url}: ${err.message}`);
-        return null;
+async function main() {
+  require('dotenv').config({ quiet: true });
+  const config = loadConfig();
+  const scout = new ScoutAgent();
+  const controller = new AbortController();
+  let client;
+  const shutdown = () => {
+    controller.abort();
+    void scout.close().catch(() => {});
+    client?.destroy();
+  };
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+  try {
+    const products = config.fixture ? JSON.parse(await readFile(config.fixture, 'utf8')) : undefined;
+    if (products && (!Array.isArray(products) || !config.dryRun)) {
+      throw new Error('Fixtures require a product array and DRY_RUN=true');
     }
+    if (!config.dryRun) {
+      const { Client, GatewayIntentBits, Events } = require('discord.js');
+      client = new Client({ intents: [GatewayIntentBits.Guilds], rest: { timeout: config.timeoutMs } });
+      client.on('error', () => console.warn('[DISCORD] Connection error'));
+      const ready = new Promise(resolve => client.once(Events.ClientReady, resolve));
+      await client.login(config.token);
+      await Promise.race([
+        ready,
+        sleep(30000, undefined, { signal: controller.signal }).then(() => { throw new Error('Discord readiness timeout'); }),
+      ]);
+    }
+    do {
+      await runCycle({ scout, client, config, signal: controller.signal, products });
+      if (!config.once) await sleep(config.intervalMs, undefined, { signal: controller.signal }).catch(() => {});
+    } while (!config.once && !controller.signal.aborted);
+  } finally {
+    controller.abort();
+    await scout.close().catch(() => {});
+    client?.destroy();
+    process.removeListener('SIGINT', shutdown);
+    process.removeListener('SIGTERM', shutdown);
+  }
 }
 
-async function runCycle() {
-    console.log(`\n=== SNIPER CYCLE START: ${new Date().toISOString()} ===`);
-    let cycleResults = [];
-    
-    try {
-        const flippaUrls = await scout.discoverFlippa();
-        const gumroadUrls = await scout.discoverGumroad();
-        const targetUrls = [...flippaUrls, ...gumroadUrls];
-
-        console.log(`[BOT] Discovered ${targetUrls.length} targets. Scrutinizing...`);
-
-        for (const url of targetUrls) {
-            const res = await processSignal(url);
-            if (res) cycleResults.push(res);
-            await new Promise(r => setTimeout(r, 2000));
-        }
-
-        if (cycleResults.length > 0) {
-            await sendSummary(client, cycleResults);
-        }
-    } catch (error) {
-        console.error("CYCLE FAILURE:", error.message);
-    }
-
-    console.log("=== CYCLE COMPLETE ===\n");
+if (require.main === module) {
+  main().catch(() => {
+    console.error('[WORKER] Startup or runtime failure; check configuration and service availability');
+    process.exitCode = 1;
+  });
 }
-
-// 5. STARTUP & INITIALIZATION
-async function startBot() {
-    console.log("🚀 INITIALIZING SNIPER BOT...");
-    
-    // ENV AUDIT
-    console.log("-----------------------------------------");
-    console.log("ENV CHECK:");
-    console.log("CHANNEL_ID_MAIN:", process.env.CHANNEL_ID_MAIN ? "✅ LOADED" : "❌ MISSING");
-    console.log("CHANNEL_ID_PRIORITY:", process.env.CHANNEL_ID_PRIORITY ? "✅ LOADED" : "❌ MISSING");
-    console.log("CHANNEL_ID_REVIEW:", process.env.CHANNEL_ID_REVIEW ? "✅ LOADED" : "❌ MISSING");
-    console.log("-----------------------------------------");
-
-    const rawToken = process.env.DISCORD_TOKEN || process.env.DISCORD_BOT_TOKEN;
-    const token = rawToken ? rawToken.trim() : null;
-
-    if (!token) {
-        console.error("❌ ERROR: No Discord Token found in environment!");
-        process.exit(1);
-    }
-
-    console.log(`🔍 Token Debug: Length=${token.length}, Prefix=${token.substring(0, 10)}...`);
-    
-    client.once("ready", async () => {
-        console.log(`✅ DISCORD CLIENT READY: Logged in as ${client.user.tag}`);
-        console.log(`📡 MONITORING: MAIN=${process.env.CHANNEL_ID_MAIN}, PRIORITY=${process.env.CHANNEL_ID_PRIORITY}, REVIEW=${process.env.CHANNEL_ID_REVIEW}`);
-
-        // Start the infinite cycle loop
-        while (true) {
-            try {
-                await runCycle();
-            } catch (err) {
-                console.error("🚨 CRITICAL CYCLE ERROR:", err.message);
-            }
-
-            console.log("⏳ Cycle complete. Sleeping for 10 minutes...");
-            await new Promise(resolve => setTimeout(resolve, 600000));
-        }
-    });
-
-    try {
-        await client.login(token);
-    } catch (loginError) {
-        console.error("❌ DISCORD LOGIN FAILED:", loginError.message);
-        process.exit(1); 
-    }
-}
-
-startBot();
+module.exports = { runCycle, sendAlert, main };

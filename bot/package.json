@@ -1,12 +1,21 @@
 {
-  "name": "sneakerbot-bot",
+  "name": "opportunity-scout-worker",
   "version": "1.0.0",
-  "description": "Node.js scraping service",
+  "private": true,
+  "description": "Playwright discovery worker for Opportunity Scout",
   "main": "index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test test/*.test.js",
+    "test:browser": "node --test test/browser.spec.js",
+    "check": "node --check index.js && node --check scout.js && node --check logic.js && node --check config.js"
+  },
   "dependencies": {
-    "axios": "^1.6.7",
-    "discord.js": "^14.14.1",
-    "dotenv": "^16.4.5",
-    "playwright": "^1.42.1"
+    "discord.js": "14.27.0",
+    "dotenv": "18.0.6",
+    "playwright": "1.63.0"
   }
 }

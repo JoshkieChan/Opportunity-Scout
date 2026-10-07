@@ -1,0 +1,23 @@
+[
+  {
+    "title": "Example SaaS business",
+    "price": 850,
+    "reviews": 12,
+    "description": "Recurring revenue. Monthly revenue: $1.2K. Monthly profit: $400.",
+    "url": "https://flippa.com/12345-example"
+  },
+  {
+    "title": "Example business",
+    "price": 500,
+    "reviews": 0,
+    "description": "Monthly revenue: $100.",
+    "url": "https://flippa.com/12346-example"
+  },
+  {
+    "title": "Example course",
+    "price": 150,
+    "reviews": 0,
+    "description": "Learn to grow sales.",
+    "url": "https://example.gumroad.com/l/example"
+  }
+]

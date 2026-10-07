@@ -1,18 +1,16 @@
-node_modules
+node_modules/
+.venv/
+.tools/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
 .env
-monitor.log
-.DS_Store
-# Data layer
+.env.*
+!.env.example
+*.log
 data/
-# Logs
 logs/
-# Config/Secrets (Global JSON guard)
-**/*.json
-!config/config.json
-!package.json
-!package-lock.json
-# Legacy
-legacy/
-# Specific secret files
-**/acquired-voice*.json
+.DS_Store
 **/service-account*.json
+**/acquired-voice*.json

@@ -1,0 +1,50 @@
+name: Checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: bot/package-lock.json
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q
+      - run: ruff check validator scripts
+      - run: npm ci --prefix bot
+      - run: npm test --prefix bot
+      - run: node bot/node_modules/playwright/cli.js install --with-deps chromium
+      - run: npm run test:browser --prefix bot
+      - run: npm run check --prefix bot
+      - run: npm audit --prefix bot --audit-level=moderate
+      - run: pip-audit -r validator/requirements.txt
+      - name: Real HTTP integration
+        run: |
+          python -m uvicorn validator.main:app --host 127.0.0.1 --port 8000 &
+          trap 'kill $!' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health; then break; fi
+            sleep 1
+          done
+          node scripts/smoke.js
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
+      - run: docker compose build
+      - run: docker compose up -d --wait validator
+      - name: Worker to validator over Compose network
+        run: docker compose run --rm --no-deps -v "$PWD/scripts:/scripts:ro" -v "$PWD/fixtures:/fixtures:ro" -v "$PWD/bot/logic.js:/bot/logic.js:ro" bot node /scripts/smoke.js
+      - name: Chromium launch smoke
+        run: docker compose run --rm --no-deps bot node -e "require('playwright').chromium.launch({headless:true}).then(async b => { const p = await b.newPage(); await p.setContent('<title>Scout smoke</title>'); if (await p.title() !== 'Scout smoke') throw Error('Browser failed'); await b.close(); })"
+      - if: always()
+        run: docker compose down --volumes
