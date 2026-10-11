@@ -7,6 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -19,6 +21,7 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest -q
       - run: ruff check validator scripts
+      - run: python scripts/scan_secrets.py
       - run: npm ci --prefix bot
       - run: npm test --prefix bot
       - run: node bot/node_modules/playwright/cli.js install --with-deps chromium
@@ -35,6 +38,7 @@ jobs:
             sleep 1
           done
           node scripts/smoke.js
+          DRY_RUN=true RUN_ONCE=true REQUEST_DELAY_MS=0 FIXTURE_PATH=fixtures/products.json node bot/index.js
   docker:
     runs-on: ubuntu-latest
     steps:
@@ -46,5 +50,16 @@ jobs:
         run: docker compose run --rm --no-deps -v "$PWD/scripts:/scripts:ro" -v "$PWD/fixtures:/fixtures:ro" -v "$PWD/bot/logic.js:/bot/logic.js:ro" bot node /scripts/smoke.js
       - name: Chromium launch smoke
         run: docker compose run --rm --no-deps bot node -e "require('playwright').chromium.launch({headless:true}).then(async b => { const p = await b.newPage(); await p.setContent('<title>Scout smoke</title>'); if (await p.title() !== 'Scout smoke') throw Error('Browser failed'); await b.close(); })"
+      - name: Fixture cycle and graceful shutdown
+        run: |
+          worker=$(docker compose run -d --no-deps -e DRY_RUN=true -e RUN_ONCE=false -e REQUEST_DELAY_MS=0 -e FIXTURE_PATH=/fixtures/products.json -v "$PWD/fixtures:/fixtures:ro" bot)
+          trap 'docker rm -f "$worker"' EXIT
+          for attempt in $(seq 1 30); do
+            if docker logs "$worker" 2>&1 | grep -q 'Cycle complete; approved=2'; then break; fi
+            sleep 1
+          done
+          docker logs "$worker" 2>&1 | grep 'Cycle complete; approved=2'
+          docker stop --time 10 "$worker"
+          test "$(docker inspect -f '{{.State.ExitCode}}' "$worker")" = 0
       - if: always()
         run: docker compose down --volumes

@@ -14,7 +14,7 @@ function trustedUrl(value) {
 }
 
 function parsePrice(text) {
-  const match = text?.match(/\$\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)(?![\d,.kKmM])/);
+  const match = text?.match(/\$\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?)(?![\w,]|\.\d)/);
   return match ? Number(match[1].replaceAll(',', '')) : null;
 }
 

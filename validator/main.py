@@ -11,7 +11,12 @@ app = FastAPI(title="Opportunity Scout", version="1.0.0")
 @app.exception_handler(RequestValidationError)
 async def invalid_request(_request, exc: RequestValidationError) -> JSONResponse:
     # Do not echo untrusted inputs, credentials, or non-JSON numeric values.
-    detail = [{key: error[key] for key in ("loc", "msg", "type")} for error in exc.errors()]
+    fields = set(Product.model_fields)
+    detail = []
+    for error in exc.errors():
+        location = [part if part == "body" or part in fields else "field"
+                    for part in error["loc"]]
+        detail.append({"loc": location, "msg": error["msg"], "type": error["type"]})
     return JSONResponse(status_code=422, content={"detail": detail})
 
 

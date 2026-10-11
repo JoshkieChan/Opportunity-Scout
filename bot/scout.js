@@ -24,7 +24,7 @@ class ScoutAgent {
     try {
       await this.init();
       context = await this.browser.newContext();
-      // Only navigate main documents on supported marketplaces, including redirects.
+      // Restrict document and frame navigation to supported marketplaces, including redirects.
       await context.route('**/*', route => {
         const request = route.request();
         if (request.isNavigationRequest() && !trustedUrl(request.url())) return route.abort();

@@ -53,3 +53,15 @@ def test_raw_nan_rejected_without_server_error():
 
     body = json.dumps({**PAYLOAD, "price": float("nan")})
     assert client.post("/validate", content=body, headers={"Content-Type": "application/json"}).status_code == 422
+
+
+@pytest.mark.parametrize("payload", [
+    {**PAYLOAD, "private-value-do-not-echo": "private-value-do-not-echo"},
+    {**PAYLOAD, "price": "private-value-do-not-echo"},
+    {**PAYLOAD, "url": "https://user:private-value-do-not-echo@flippa.com/a"},
+    {**PAYLOAD, "description": {"private-value-do-not-echo": "private-value-do-not-echo"}},
+])
+def test_validation_errors_do_not_echo_sensitive_input(payload):
+    response = client.post("/validate", json=payload)
+    assert response.status_code == 422
+    assert "private-value-do-not-echo" not in response.text

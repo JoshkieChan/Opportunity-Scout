@@ -1,8 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const { rankDeals, trustedUrl, parsePrice, reviewCount, validateProduct } = require('../logic');
 const { loadConfig } = require('../config');
-const { runCycle, sendAlert } = require('../index');
+const { runCycle, sendAlert, parseFixtures, connectDiscord } = require('../index');
 const ScoutAgent = require('../scout');
 
 const config = { dryRun: true, maxTargets: 30, delayMs: 0, timeoutMs: 20, validatorUrl: 'http://validator/validate', channels: { A: 'priority', B: 'review' } };
@@ -25,6 +26,7 @@ test('price and explicit review parsing do not use arbitrary parenthesized numbe
   assert.equal(parsePrice('Price $1,234,567.89'), 1234567.89);
   assert.equal(parsePrice('$12,34'), null);
   assert.equal(parsePrice('$1.2K'), null);
+  assert.equal(parsePrice('Asking price: $500. More details follow.'), 500);
   assert.equal(reviewCount('version (2026), 1,200 reviews'), 1200);
   assert.equal(reviewCount('version (2026)'), 0);
 });
@@ -35,6 +37,83 @@ test('configuration supports credential-free dry runs and rejects missing creden
   assert.throws(() => loadConfig({ DRY_RUN: 'true', HTTP_TIMEOUT_MS: '0' }), /Invalid/);
   assert.throws(() => loadConfig({ DRY_RUN: 'true', CYCLE_INTERVAL_MS: '2147483648' }), /Invalid/);
   assert.throws(() => loadConfig({ DRY_RUN: 'true', VALIDATOR_URL: 'file:///a' }), /Invalid/);
+  assert.throws(() => loadConfig({ DRY_RUN: 'TRUE' }), /Invalid DRY_RUN/);
+  assert.throws(() => loadConfig({ DRY_RUN: 'true', RUN_ONCE: 'yes' }), /Invalid RUN_ONCE/);
+});
+
+test('invalid fixture documents cannot fall through to live discovery', () => {
+  for (const input of ['null', 'false', '0', '{}', '""', '{']) {
+    assert.throws(() => parseFixtures(input, true));
+  }
+  assert.throws(() => parseFixtures('[]', false));
+  assert.deepEqual(parseFixtures('[]', true), []);
+});
+
+test('Discord startup timeout includes a stalled login', async () => {
+  const client = new EventEmitter();
+  client.login = () => new Promise(() => {});
+  await assert.rejects(connectDiscord(client, 'test-value', new AbortController().signal, 20), /timeout/);
+  assert.equal(client.listenerCount('clientReady'), 0);
+});
+
+test('Discord startup resolves on readiness and aborts during shutdown', async () => {
+  const client = new EventEmitter();
+  client.login = async () => { client.emit('clientReady'); };
+  await connectDiscord(client, 'test-value', new AbortController().signal, 1000);
+  const controller = new AbortController();
+  client.login = () => new Promise(() => {});
+  const pending = connectDiscord(client, 'test-value', controller.signal, 1000);
+  controller.abort();
+  await assert.rejects(pending, { name: 'AbortError' });
+  assert.equal(client.listenerCount('clientReady'), 0);
+});
+
+test('request timeout aborts stalled requests within the retry budget', async () => {
+  let calls = 0;
+  const keepAlive = setTimeout(() => {}, 2000);
+  try {
+    const actual = await validateProduct(product, config, { fetchImpl: async (_url, options) => {
+      calls++;
+      return new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+      });
+    } });
+    assert.equal(actual, null);
+    assert.equal(calls, 3);
+  } finally {
+    clearTimeout(keepAlive);
+  }
+});
+
+test('empty fixture arrays and already-aborted cycles never discover URLs', async () => {
+  const scout = { discoverFlippa: () => { throw new Error('Unexpected discovery'); } };
+  assert.deepEqual(await runCycle({ scout, config, products: [] }), []);
+  const controller = new AbortController();
+  controller.abort();
+  assert.deepEqual(await runCycle({ scout, config, signal: controller.signal }), []);
+});
+
+test('Tier A routes to priority and rejected products never send', async () => {
+  const fetched = [];
+  const client = { channels: { fetch: async id => {
+    fetched.push(id);
+    return { isSendable: () => true, send: async () => {} };
+  } } };
+  await sendAlert(client, product, { ...result, tier: 'A' }, { ...config, dryRun: false });
+  await sendAlert(client, product, { ...result, tier: 'C', approved: false }, { ...config, dryRun: false });
+  assert.deepEqual(fetched, ['priority']);
+});
+
+test('shutdown closes a browser whose launch is still pending', async () => {
+  let finish;
+  let closed = 0;
+  const scout = new ScoutAgent({ chromium: { launch: () => new Promise(resolve => { finish = resolve; }) } });
+  const launching = scout.init();
+  await scout.close();
+  finish({ close: async () => { closed++; } });
+  await assert.rejects(launching, /stopped/);
+  assert.equal(closed, 1);
+  assert.equal(scout.browser, null);
 });
 
 test('validator retries transient failure then succeeds', async () => {

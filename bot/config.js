@@ -1,4 +1,9 @@
 function loadConfig(env = process.env) {
+  function boolean(name) {
+    const value = env[name] ?? 'false';
+    if (!['true', 'false'].includes(value)) throw new Error('Invalid ' + name);
+    return value === 'true';
+  }
   function integer(name, fallback, minimum = 1) {
     const value = Number(env[name] ?? fallback);
     if (!Number.isSafeInteger(value) || value < minimum || value > 2147483647) throw new Error('Invalid ' + name);
@@ -9,7 +14,7 @@ function loadConfig(env = process.env) {
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
     throw new Error('Invalid VALIDATOR_URL');
   }
-  const dryRun = env.DRY_RUN === 'true';
+  const dryRun = boolean('DRY_RUN');
   const token = (env.DISCORD_TOKEN || '').trim();
   const channels = { A: env.CHANNEL_ID_PRIORITY, B: env.CHANNEL_ID_REVIEW };
   if (!dryRun && (!token || !channels.A || !channels.B)) {
@@ -17,7 +22,7 @@ function loadConfig(env = process.env) {
   }
   return {
     validatorUrl, dryRun, token, channels,
-    once: env.RUN_ONCE === 'true',
+    once: boolean('RUN_ONCE'),
     fixture: env.FIXTURE_PATH,
     timeoutMs: integer('HTTP_TIMEOUT_MS', 10000),
     intervalMs: integer('CYCLE_INTERVAL_MS', 600000),

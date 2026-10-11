@@ -4,6 +4,30 @@ const { loadConfig } = require('./config');
 const { rankDeals, validateProduct } = require('./logic');
 const ScoutAgent = require('./scout');
 
+function parseFixtures(content, dryRun) {
+  const products = JSON.parse(content);
+  if (!dryRun || !Array.isArray(products)) {
+    throw new Error('Fixtures require a product array and DRY_RUN=true');
+  }
+  return products;
+}
+
+async function connectDiscord(client, token, signal, timeoutMs = 30000) {
+  const timer = new AbortController();
+  let onReady;
+  const ready = new Promise(resolve => { onReady = resolve; client.once('clientReady', onReady); });
+  try {
+    await Promise.race([
+      Promise.all([ready, client.login(token)]),
+      sleep(timeoutMs, undefined, { signal: AbortSignal.any([signal, timer.signal]) })
+        .then(() => { throw new Error('Discord readiness timeout'); }),
+    ]);
+  } finally {
+    timer.abort();
+    client.removeListener('clientReady', onReady);
+  }
+}
+
 function plain(value) {
   return String(value).replace(/[*_`~|<>@]/g, '').slice(0, 200);
 }
@@ -27,6 +51,7 @@ async function sendAlert(client, product, result, config) {
 
 async function runCycle({ scout, client, config, signal, products, validate = validateProduct }) {
   const results = [];
+  if (signal?.aborted) return results;
   const targets = products || [...new Set([
     ...await scout.discoverFlippa(), ...await scout.discoverGumroad(),
   ])];
@@ -76,25 +101,20 @@ async function main() {
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
   try {
-    const products = config.fixture ? JSON.parse(await readFile(config.fixture, 'utf8')) : undefined;
-    if (products && (!Array.isArray(products) || !config.dryRun)) {
-      throw new Error('Fixtures require a product array and DRY_RUN=true');
-    }
+    const products = config.fixture
+      ? parseFixtures(await readFile(config.fixture, 'utf8'), config.dryRun) : undefined;
     if (!config.dryRun) {
-      const { Client, GatewayIntentBits, Events } = require('discord.js');
+      const { Client, GatewayIntentBits } = require('discord.js');
       client = new Client({ intents: [GatewayIntentBits.Guilds], rest: { timeout: config.timeoutMs } });
       client.on('error', () => console.warn('[DISCORD] Connection error'));
-      const ready = new Promise(resolve => client.once(Events.ClientReady, resolve));
-      await client.login(config.token);
-      await Promise.race([
-        ready,
-        sleep(30000, undefined, { signal: controller.signal }).then(() => { throw new Error('Discord readiness timeout'); }),
-      ]);
+      await connectDiscord(client, config.token, controller.signal);
     }
     do {
       await runCycle({ scout, client, config, signal: controller.signal, products });
       if (!config.once) await sleep(config.intervalMs, undefined, { signal: controller.signal }).catch(() => {});
     } while (!config.once && !controller.signal.aborted);
+  } catch (error) {
+    if (!controller.signal.aborted) throw error;
   } finally {
     controller.abort();
     await scout.close().catch(() => {});
@@ -110,4 +130,4 @@ if (require.main === module) {
     process.exitCode = 1;
   });
 }
-module.exports = { runCycle, sendAlert, main };
+module.exports = { runCycle, sendAlert, main, parseFixtures, connectDiscord };
